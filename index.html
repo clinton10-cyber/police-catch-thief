@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#12122a">
+<title>Police &amp; Thief — 3D</title>
+<meta name="description" content="Police catch Thief: the classic paper-chit game in 3D. Roles are shuffled every round — find the Thief.">
+<link rel="stylesheet" href="style.css">
+</head><body>
+<div id="stage"></div>
+<div id="ui">
+  <div id="board"></div>
+  <div id="center"><div id="prompt"></div><button id="btn" hidden></button></div>
+  <div id="role" class="card"></div>
+  <div id="log"></div>
+  <button id="help-btn" aria-label="How to play">?</button>
+</div>
+<div id="help" hidden><div class="sheet">
+  <h2>How to play</h2>
+  <p>Five identical players sit in a circle: <b>You</b> and four NPCs. Every round the folded papers are reshuffled:</p>
+  <p><b>King 1000 · Queen 800 · Minister 600 · Police 500 · Thief 0</b></p>
+  <p>Only you see your own role. The <b>Police</b> walks forward and shoots the player they think is the <b>Thief</b>.</p>
+  <ul><li>Right guess → Police banks <b>500</b>.</li><li>Wrong guess → the player shot takes the <b>500</b>.</li></ul>
+  <p>When you're Police: move to aim, tap to fire. Drag the background to look around. Roles are revealed after every shot — learn the NPCs.</p>
+  <button id="help-close">Got it</button>
+</div></div>
+<script type="module" src="js/main.js"></script>
+</body></html>
