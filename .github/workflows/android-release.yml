@@ -1,0 +1,183 @@
+name: Build APK and publish release
+
+# Every push to main builds an installable Android APK and publishes it as a GitHub Release
+# (tag "build-<run number>"). Official versions: git tag v1.0.0 && git push origin v1.0.0
+# Manual: Actions tab -> "Build APK and publish release" -> Run workflow (APK kept as a build artifact).
+# Optional signing: add secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+# ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD to also produce a signed release APK.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      APP_NAME: Police & Thief 3D
+      APP_ID: com.clintontech.policethief
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Copy the website into www/
+        run: |
+          mkdir www
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'www' --exclude 'android' \
+                --exclude 'node_modules' --exclude '*.md' ./ www/
+
+      - name: Install Capacitor and create the Android project
+        run: |
+          npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npx cap init "$APP_NAME" "$APP_ID" --web-dir www
+          npx cap add android
+          npx cap sync android
+
+      - name: Apply custom app icon
+        run: |
+          pip install pillow
+          python3 - <<'PY'
+          from PIL import Image
+          import os, shutil
+          res = "android/app/src/main/res"
+          src = Image.open("assets/icon-maskable-512.png").convert("RGBA")
+          sizes = {"mdpi":48,"hdpi":72,"xhdpi":96,"xxhdpi":144,"xxxhdpi":192}
+          fg = {"mdpi":108,"hdpi":162,"xhdpi":216,"xxhdpi":324,"xxxhdpi":432}
+          for d, s in sizes.items():
+              p = f"{res}/mipmap-{d}"
+              os.makedirs(p, exist_ok=True)
+              ic = src.resize((s, s), Image.LANCZOS)
+              ic.save(f"{p}/ic_launcher.png"); ic.save(f"{p}/ic_launcher_round.png")
+              f = fg[d]; inner = int(f * 0.66)
+              canvas = Image.new("RGBA", (f, f), (0, 0, 0, 0))
+              canvas.paste(src.resize((inner, inner), Image.LANCZOS), ((f - inner) // 2, (f - inner) // 2))
+              canvas.save(f"{p}/ic_launcher_foreground.png")
+          open(f"{res}/values/ic_launcher_background.xml", "w").write(
+              '<?xml version="1.0" encoding="utf-8"?><resources><color name="ic_launcher_background">#12122a</color></resources>')
+          shutil.rmtree(f"{res}/mipmap-anydpi-v26", ignore_errors=True)
+          PY
+
+      - name: Lock app to landscape
+        run: |
+          F=android/app/src/main/AndroidManifest.xml
+          grep -q 'android:screenOrientation' "$F" || sed -i '0,/<activity/s//<activity android:screenOrientation="sensorLandscape"/' "$F"
+
+      - name: Full screen (hide system bars, draw into notch)
+        run: |
+          python3 - <<'PY'
+          import glob, re
+          st = "android/app/src/main/res/values/styles.xml"
+          s = open(st).read()
+          if "windowFullscreen" not in s:
+              s = re.sub(r'(<style name="AppTheme\.NoActionBar"[^>]*>)', r'\1\n        <item name="android:windowFullscreen">true</item>', s, count=1)
+              open(st, "w").write(s)
+          f = glob.glob("android/app/src/main/java/**/MainActivity.java", recursive=True)[0]
+          pkg = re.search(r'^package\s+([\w.]+);', open(f).read(), re.M).group(1)
+          open(f, "w").write("""package %s;
+
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.view.WindowManager;
+          import androidx.core.view.WindowCompat;
+          import androidx.core.view.WindowInsetsCompat;
+          import androidx.core.view.WindowInsetsControllerCompat;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+            @Override public void onCreate(Bundle b) { super.onCreate(b); goImmersive(); }
+            @Override public void onResume() { super.onResume(); goImmersive(); }
+            @Override public void onWindowFocusChanged(boolean hasFocus) {
+              super.onWindowFocusChanged(hasFocus);
+              if (hasFocus) goImmersive();
+            }
+            private void goImmersive() {
+              if (Build.VERSION.SDK_INT >= 28) {
+                WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.layoutInDisplayCutoutMode = Build.VERSION.SDK_INT >= 30
+                  ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                  : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                getWindow().setAttributes(lp);
+              }
+              WindowInsetsControllerCompat c = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
+              c.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+              c.hide(WindowInsetsCompat.Type.systemBars());
+            }
+          }
+          """ % pkg)
+          PY
+
+      - name: Set version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="0.0.${GITHUB_RUN_NUMBER}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sed -i "s/versionCode 1/versionCode ${GITHUB_RUN_NUMBER}/; s/versionName \"1.0\"/versionName \"${VERSION}\"/" android/app/build.gradle
+
+      - name: Build debug APK (always installable)
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Build signed release APK (only if signing secrets exist)
+        if: ${{ env.KEYSTORE_B64 != '' }}
+        working-directory: android
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/release.jks" \
+            -Pandroid.injected.signing.store.password="$KS_PASS" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASS"
+
+      - name: Collect APKs
+        run: |
+          mkdir out
+          cp android/app/build/outputs/apk/debug/app-debug.apk "out/Police-and-Thief-${VERSION}-debug.apk"
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk "out/Police-and-Thief-${VERSION}.apk"
+          fi
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: out/*.apk
+
+      - name: Publish GitHub Release (version tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true
+
+      - name: Publish GitHub Release (automatic build from branch push)
+        if: github.ref_type == 'branch' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          files: out/*.apk
+          generate_release_notes: true
+          make_latest: true
