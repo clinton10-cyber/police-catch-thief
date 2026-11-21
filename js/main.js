@@ -22,7 +22,7 @@ const OUTFITS = {
   "Naija":   { topStyle: "dashiki", topColor: "#b45309", topPattern: "ankara", bottomStyle: "baggy", bottomColor: "#1f2937" },
   "Sport":   { topStyle: "jersey", topColor: "#dc2626", bottomStyle: "shorts", bottomColor: "#111827", shoeStyle: "sneakers" },
 };
-const K = { scores: "pct.scores.v1", hist: "pct.hist.v1", outfit: "pct.outfit.v1", haptics: "pct.haptics", help: "pct.seenHelp" };
+const K = { quality: "pct.quality", fps: "pct.fps", scores: "pct.scores.v1", hist: "pct.hist.v1", outfit: "pct.outfit.v1", haptics: "pct.haptics", help: "pct.seenHelp" };
 const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } };
 const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
 const buzz = (p) => { if (load(K.haptics, true) && navigator.vibrate) try { navigator.vibrate(p); } catch (e) {} };
@@ -170,6 +170,20 @@ function renderHistory() {
   $("#history").innerHTML = history.length ? history.map((h) => `<div class="${h.ok ? "ok" : ""}">R${h.n} · ${h.text}<br><span class="dim">${h.ok ? "Caught — Police banks" : "Missed —"} 500 → ${h.win}</span></div>`).join("") : `<div class="dim">No rounds yet.</div>`;
 }
 renderOutfits(); renderHistory();
+
+/* graphics quality */
+const QUAL = [["auto", "Auto"], ["minimum", "Minimum"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]];
+let qSel = load(K.quality, "auto"); if (!QUAL.some(([k]) => k === qSel)) qSel = "auto";
+function renderQuality() {
+  const box = $("#quality"); box.innerHTML = "";
+  QUAL.forEach(([k, n]) => { const b = document.createElement("button"); b.textContent = n; b.className = k === qSel ? "on" : ""; b.onclick = () => { qSel = k; store(K.quality, k); world.setQuality(k); renderQuality(); Sound.tick(); }; box.appendChild(b); });
+}
+world.onQuality((mode, name) => { $("#q-now").textContent = mode === "auto" ? `Auto · now ${name}` : name; });
+world.setQuality(qSel); renderQuality();
+const fpsEl = $("#fps"), showFps = load(K.fps, false);
+$("#opt-fps").checked = showFps; fpsEl.hidden = !showFps;
+$("#opt-fps").onchange = (e) => { store(K.fps, e.target.checked); fpsEl.hidden = !e.target.checked; };
+world.onFps((f) => { if (!fpsEl.hidden) fpsEl.textContent = Math.round(f) + " FPS"; });
 
 /* help + keyboard */
 const help = $("#help");

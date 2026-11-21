@@ -21,7 +21,7 @@ export function createScene(container, names, outfit = {}) {
   const room = buildCanteen(scene);
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 90);
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
 
@@ -113,6 +113,23 @@ export function createScene(container, names, outfit = {}) {
     camera.position.z = Math.min(camera.position.z, room.HZ - 0.6); camera.position.x = Math.max(-room.HX + 0.6, Math.min(room.HX - 0.6, camera.position.x));
     camera.lookAt(look);
     if (performance.now() < shakeUntil) camera.position.addScalar((Math.random() - 0.5) * shakeAmt);
+  }
+  /* ── graphics quality: render-resolution levels, plus an Auto mode that adapts to the device's frame rate ── */
+  const DPR = Math.min(devicePixelRatio || 1, 2);
+  const LEVELS = [{ n: "Minimum", pr: 0.55 }, { n: "Low", pr: 0.8 }, { n: "Medium", pr: Math.min(DPR, 1.0) }, { n: "High", pr: DPR }];
+  let qMode = "auto", level = DPR > 1.5 ? 2 : 2, onQ = null, accT = 0, accN = 0, good = 0, cool = 0, fps = 0, onFps = null;
+  function applyLevel(l) {
+    level = Math.max(0, Math.min(LEVELS.length - 1, l));
+    renderer.setPixelRatio(LEVELS[level].pr); resize(); if (onQ) onQ(qMode, LEVELS[level].n);
+  }
+  function autoStep(dt) {
+    accT += dt; accN++; cool -= dt;
+    if (accT < 1.5) return;
+    fps = accN / accT; accT = 0; accN = 0; if (onFps) onFps(fps);
+    if (qMode !== "auto" || cool > 0) return;
+    if (fps < 38 && level > 0) { applyLevel(level - 1); cool = 3; good = 0; }
+    else if (fps > 56 && level < LEVELS.length - 1) { if (++good >= 3) { applyLevel(level + 1); cool = 3; good = 0; } }
+    else if (fps <= 56) good = 0;
   }
   function resize() {
     const w = container.clientWidth, h = container.clientHeight;
@@ -260,9 +277,10 @@ export function createScene(container, names, outfit = {}) {
 
   /* ── loop ── */
   const v = new THREE.Vector3();
+  let lastT = performance.now();
   function frame() {
     requestAnimationFrame(frame);
-    const t = performance.now() * 0.001;
+    const nowT = performance.now(), t = nowT * 0.001; autoStep(Math.min(0.25, (nowT - lastT) / 1000)); lastT = nowT;
     avatars.forEach((g) => applyPose(g, t));
     row.forEach((p, k) => { if (!p || !p.userData.attn) return; const hv = k === hoverP; p.position.y = p.userData.rest.y + Math.sin(t * 3 + k) * 0.04 + (hv ? 0.08 : 0); p.scale.setScalar(hv ? 2.4 : 1.9 + Math.sin(t * 3 + k) * 0.08); });
     papers.forEach((p, i) => {
@@ -320,6 +338,9 @@ export function createScene(container, names, outfit = {}) {
     async flash(i, hex) { glow(i, hex); await wait(1000); glow(i, 0); },
     setTag(i, text, cls = "") { tags[i].className = "tag" + (i === 0 ? " me" : "") + (cls ? " " + cls : ""); tags[i].querySelector("i").textContent = text || ""; },
     clearTags() { tags.forEach((d, i) => { d.className = "tag" + (i === 0 ? " me" : ""); d.querySelector("i").textContent = ""; }); },
+    setQuality(mode) { qMode = mode; if (mode === "auto") { cool = 0; good = 0; applyLevel(level); } else applyLevel(["minimum", "low", "medium", "high"].indexOf(mode)); },
+    onQuality(fn) { onQ = fn; fn(qMode, LEVELS[level].n); },
+    onFps(fn) { onFps = fn; },
     cam(o) { if (o.theta !== undefined) theta = o.theta; if (o.phi !== undefined) phi = o.phi; if (o.zoom !== undefined) zoom = o.zoom; if (o.seat !== undefined) { const p = avatars[o.seat].position; focus = { x: p.x, y: 1.2, z: p.z }; } },
     resetCamera() { theta = 0; phi = 0.74; zoom = 1; focus = null; },
     screenPos(i) { v.copy(avatars[i].position); v.y += 1.2; v.project(camera); return { x: (v.x * 0.5 + 0.5) * container.clientWidth, y: (-v.y * 0.5 + 0.5) * container.clientHeight }; },

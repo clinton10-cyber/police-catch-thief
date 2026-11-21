@@ -47,6 +47,7 @@
     <div class="rchips"></div>
   </section>
   <div id="toasts"></div>
+  <div id="fps" hidden></div>
 </div>
 
 <aside id="drawer" hidden>
@@ -55,6 +56,9 @@
     <header><h2>Menu</h2><button id="drawer-close" class="icon" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
     <div class="dscroll">
       <section><h3>Settings</h3>
+        <div class="qlab">Graphics quality <small id="q-now"></small></div>
+        <div id="quality" class="chips"></div>
+        <label class="sw"><span>Show FPS</span><input type="checkbox" id="opt-fps"><i></i></label>
         <label class="sw"><span>Sound effects</span><input type="checkbox" id="opt-sound"><i></i></label>
         <label class="sw"><span>Vibration</span><input type="checkbox" id="opt-haptics"><i></i></label>
         <button class="wide" id="opt-cam">Reset camera view</button>
