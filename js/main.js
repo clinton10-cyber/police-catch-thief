@@ -86,19 +86,21 @@ $("#fire").onclick = () => world.confirmFire();
 /* ── the round ── */
 async function playRound() {
   roundNo++; locked = false;
-  world.clearTags(); hideResult(); step("deal");
+  world.clearTags(); hideResult(); step("deal"); world.clearPapers();
   round = Rules.createRound(seats);
   const me = round.seats.find((s) => s.isHuman), youPolice = round.police.isHuman;
   policeSeat = round.police.seatId;
   renderBoard(seats);
   setCard(me.role);
+  prompt("Dealing the folded papers…");
+  await world.dealPapers(); Sound.flip();
   prompt(`Round ${roundNo} — papers dealt. Hold your card to peek.`);
-  Sound.flip();
   if (roundNo === 1) { await wait(500); peek(true); await wait(1700); if (!locked) peek(false); } else await wait(2000);
 
   step("police"); renderBoard(seats, policeSeat);
   prompt(youPolice ? "You drew Police! Step forward…" : `${round.police.name} is the Police and steps forward…`);
   toast(youPolice ? "👮 You are the Police" : `👮 ${round.police.name} is the Police`);
+  await world.openPaper(policeSeat, "POLICE", META.police.color === "#4cc3ff" ? "#1b6fd1" : "#1b6fd1"); Sound.flip();
   await world.policeOut(policeSeat);
 
   step("shot");
@@ -120,6 +122,7 @@ async function playRound() {
   seats = round.seats.map((s) => ({ seatId: s.seatId, name: s.name, isHuman: s.isHuman, score: s.score }));
   store(K.scores, seats.map((s) => s.score));
   step("result");
+  round.seats.forEach((s) => world.openPaper(s.seatId, s.role.label.toUpperCase(), s.role.id === "thief" ? "#c4162a" : "#6b4a00"));
   world.flash(targetId, res.correct ? 0x1fae6b : 0xc0201a);
   round.seats.forEach((s) => world.setTag(s.seatId, `${META[s.role.id].ico} ${s.role.label}`, s.role.id === "police" ? "police" : s.role.id === "thief" ? "thief" : ""));
   renderBoard(seats, policeSeat, res.winner.seatId);

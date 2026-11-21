@@ -182,12 +182,68 @@ export function createScene(container, names, outfit = {}) {
   });
   cv.addEventListener("wheel", (e) => { zoom = Math.max(0.6, Math.min(1.3, zoom + e.deltaY * 0.001)); e.preventDefault(); }, { passive: false });
 
+  /* ── folded papers: dealt face-down; only the Police opens theirs ── */
+  const papers = [];
+  const paperMat = new THREE.MeshLambertMaterial({ color: 0xf1ead6 }), creaseMat = new THREE.MeshLambertMaterial({ color: 0xc9bf9f });
+  function makePaper() {
+    const g = new THREE.Group(), fold = new THREE.Group(); g.add(fold);
+    const a = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.05, 0.21), paperMat); fold.add(a);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.012, 0.02), creaseMat); b.position.y = 0.03; fold.add(b);
+    const c = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.012, 0.21), creaseMat); c.position.y = 0.03; fold.add(c);
+    g.userData = { fold, open: null, state: "folded", rest: new THREE.Vector3() };
+    return g;
+  }
+  function paperTexture(text, color) {
+    const c = document.createElement("canvas"); c.width = 320; c.height = 214; const x = c.getContext("2d");
+    x.fillStyle = "#f6f0dc"; x.fillRect(0, 0, 320, 214);
+    x.strokeStyle = "#cdbf94"; x.lineWidth = 6; x.strokeRect(8, 8, 304, 198);
+    x.fillStyle = color; x.font = "900 54px system-ui,sans-serif"; x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(text, 160, 112);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  }
+  const slot = (i) => { const h = homes[i], d = new THREE.Vector3(CENTER.x - h.x, 0, CENTER.z - h.z).normalize(); return h.clone().addScaledVector(d, 0.75).setY(1.2); };
+  async function dealPapers() {
+    await clearPapers();
+    const pile = new THREE.Vector3(CENTER.x, 0.95, CENTER.z);
+    const order = [...Array(n).keys()].sort(() => Math.random() - 0.5);   /* random hand-out order */
+    const jobs = order.map((seat, k) => new Promise(async (res) => {
+      const p = makePaper(); p.position.copy(pile); scene.add(p); papers[seat] = p;
+      const to = slot(seat); p.userData.rest.copy(to);
+      await wait(k * 170);
+      await tween(620, (t) => {
+        const e = ease(t); p.position.lerpVectors(pile, to, e); p.position.y += Math.sin(t * Math.PI) * 0.7;
+        p.rotation.set(0, t * Math.PI * 4, Math.sin(t * Math.PI) * 0.6);
+      });
+      p.rotation.set(0, Math.atan2(CENTER.x - homes[seat].x, CENTER.z - homes[seat].z), 0); res();
+    }));
+    await Promise.all(jobs);
+  }
+  async function openPaper(i, text, color) {
+    const p = papers[i]; if (!p || p.userData.state !== "folded") return;
+    p.userData.state = "open";
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), new THREE.MeshBasicMaterial({ map: paperTexture(text, color), side: THREE.DoubleSide, transparent: true }));
+    m.scale.setScalar(0.01); p.add(m); p.userData.open = m;
+    const from = p.position.clone(), to = p.userData.rest.clone().setY(1.75);
+    await tween(520, (t) => { const e = ease(t); p.position.lerpVectors(from, to, e); p.userData.fold.scale.setScalar(Math.max(0.001, 1 - e)); m.scale.setScalar(0.01 + e * 0.99); });
+    p.userData.rest.copy(to);
+  }
+  async function clearPapers() {
+    const ps = papers.filter(Boolean); papers.length = 0;
+    if (!ps.length) return;
+    await tween(280, (t) => ps.forEach((p) => p.scale.setScalar(1 - ease(t))));
+    ps.forEach((p) => { scene.remove(p); p.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.map) { o.material.map.dispose(); o.material.dispose(); } }); });
+  }
+
   /* ── loop ── */
   const v = new THREE.Vector3();
   function frame() {
     requestAnimationFrame(frame);
     const t = performance.now() * 0.001;
     avatars.forEach((g) => applyPose(g, t));
+    papers.forEach((p, i) => {
+      if (!p) return;
+      if (p.userData.state === "folded" && p.userData.rest.y && p.position.distanceTo(p.userData.rest) < 0.2) p.position.y = p.userData.rest.y + Math.sin(t * 2 + i) * 0.015;
+      if (p.userData.state === "open" && p.userData.open) p.userData.open.lookAt(camera.position);
+    });
     placeCamera();
     renderer.render(scene, camera);
     const w = container.clientWidth, h = container.clientHeight;
@@ -207,6 +263,7 @@ export function createScene(container, names, outfit = {}) {
         scene.remove(old); disposeAvatar(old); scene.add(g); avatars[i] = g;
       });
     },
+    dealPapers, openPaper, clearPapers,
     async policeOut(i) {
       draw(i);
       const inward = homes[i].clone().sub(new THREE.Vector3(CENTER.x, 0, CENTER.z)).negate().normalize();
