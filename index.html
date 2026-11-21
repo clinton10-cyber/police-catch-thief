@@ -2,33 +2,82 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#12122a">
-<title>Police &amp; Thief — 3D</title>
-<meta name="description" content="Police catch Thief: the classic paper-chit game in 3D. Roles are shuffled every round — find the Thief.">
+<meta name="theme-color" content="#0d0f1c">
+<title>Police &amp; Thief 3D</title>
+<meta name="description" content="Police catch Thief: the classic paper-chit game in a 3D canteen. Roles are shuffled every round — find the Thief.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="assets/icon-192.png">
 <link rel="apple-touch-icon" href="assets/icon-192.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
 <link rel="stylesheet" href="style.css">
 </head><body>
 <div id="stage"></div>
+<div id="loading"><div class="ring"></div><b>Setting the canteen…</b></div>
+
 <div id="ui">
-  <div id="board"></div>
-  <div id="center"><div id="prompt"></div><button id="btn" hidden></button></div>
-  <div id="role" class="card"></div>
-  <div id="log"></div>
-  <button id="help-btn" aria-label="How to play">?</button>
+  <header id="top">
+    <button id="menu-btn" class="icon" aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <ol id="steps" aria-label="Round progress">
+      <li data-s="deal">Deal</li><li data-s="police">Police</li><li data-s="shot">Shot</li><li data-s="result">Result</li>
+    </ol>
+    <button id="help-btn" class="icon" aria-label="How to play"><svg viewBox="0 0 24 24"><path d="M9.2 9a3 3 0 1 1 4.6 2.5c-1 .7-1.8 1.2-1.8 2.5M12 17.5v.01"/></svg></button>
+  </header>
+
+  <div id="board" aria-live="polite"></div>
+  <div id="prompt-wrap"><div id="prompt"></div></div>
+
+  <footer id="dock">
+    <button id="rolecard" aria-label="Hold to peek at your role">
+      <span class="face back"><i>?</i><small>HOLD TO PEEK</small></span>
+      <span class="face front"><em id="r-ico"></em><strong id="r-name"></strong><small id="r-pts"></small></span>
+    </button>
+    <div id="actions">
+      <div id="target" hidden><small>TARGET LOCKED</small><b id="t-name"></b></div>
+      <div class="row">
+        <button id="fire" class="cta danger" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>FIRE</button>
+        <button id="next" class="cta" hidden>Next round →</button>
+      </div>
+    </div>
+  </footer>
+
+  <section id="result" hidden>
+    <div class="rtitle"></div><div class="rmsg"></div>
+    <div class="rchips"></div>
+  </section>
+  <div id="toasts"></div>
 </div>
+
+<aside id="drawer" hidden>
+  <div class="dscrim"></div>
+  <div class="dpanel">
+    <header><h2>Menu</h2><button id="drawer-close" class="icon" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
+    <div class="dscroll">
+      <section><h3>Settings</h3>
+        <label class="sw"><span>Sound effects</span><input type="checkbox" id="opt-sound"><i></i></label>
+        <label class="sw"><span>Vibration</span><input type="checkbox" id="opt-haptics"><i></i></label>
+        <button class="wide" id="opt-cam">Reset camera view</button>
+      </section>
+      <section><h3>Wardrobe <small>everyone wears the same, so no one can be read</small></h3>
+        <div id="outfits" class="chips"></div>
+      </section>
+      <section><h3>Last rounds</h3><div id="history" class="hist"></div></section>
+      <section><button class="wide ghostred" id="opt-reset">Reset all scores</button></section>
+    </div>
+  </div>
+</aside>
+
 <div id="help" hidden><div class="sheet">
   <h2>How to play</h2>
-  <p>Five identical players sit in a circle: <b>You</b> and four NPCs. Every round the folded papers are reshuffled:</p>
-  <p><b>King 1000 · Queen 800 · Minister 600 · Police 500 · Thief 0</b></p>
-  <p>Only you see your own role. The <b>Police</b> walks forward and shoots the player they think is the <b>Thief</b>.</p>
-  <ul><li>Right guess → Police banks <b>500</b>.</li><li>Wrong guess → the player shot takes the <b>500</b>.</li></ul>
-  <p>When you're Police: move to aim, tap to fire. Drag the background to look around. Roles are revealed after every shot — learn the NPCs.</p>
-  <button id="help-close">Got it</button>
+  <p>Five identical players, you and four NPCs. Every round the folded papers are reshuffled:</p>
+  <div class="roles"><span>👑 King <b>1000</b></span><span>👸 Queen <b>800</b></span><span>🎩 Minister <b>600</b></span><span>👮 Police <b>500</b></span><span>🦹 Thief <b>0</b></span></div>
+  <p>Only you can see your own role — <b>hold your card to peek</b>. The Police steps forward and shoots who they think is the Thief.</p>
+  <ul><li>Right guess → Police banks <b>500</b></li><li>Wrong guess → the player shot takes the <b>500</b></li></ul>
+  <p class="dim">As Police: tap a player to lock on, tap again (or FIRE) to shoot. Drag to look around, pinch or scroll to zoom. Keys: <kbd>Space</kbd> next · <kbd>M</kbd> mute · <kbd>R</kbd> camera.</p>
+  <button id="help-close">Let's play</button>
 </div></div>
+
 <script type="module" src="js/main.js"></script>
 <script>if("serviceWorker" in navigator&&location.protocol.startsWith("http"))addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));</script>
 </body></html>

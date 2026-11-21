@@ -1,218 +1,243 @@
-/* scene.js — Three.js circle of identical avatars, walk-out, aiming, shot effects. */
-import * as THREE from "../vendor/three.module.min.js";
+/* scene.js — canteen interior, five identical faceted characters (the game's wardrobe), the game's pistol. */
+import * as THREE from "three";
+import { buildCanteen } from "./canteen.js";
+import { buildCharacter, groundLeg, groundArm, setGrip, makeBlob } from "./engine/characters/lowpoly.js";
+import { Wardrobe } from "./engine/core/wardrobe.js";
+import { buildPistol3D, POSE, LEGS_AIM } from "./gun.js";
 
-const SKIN = 0x8d5524, SHIRT = 0x3a3a5a, PANTS = 0x22223a, HAIR = 0x1a1a1a;
 const RADIUS = 3.3;
+const CENTER = { x: 0, z: 1 };
+const lerpArr = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const ease = (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t);
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const tween = (ms, fn) => new Promise((res) => {
+  const t0 = performance.now();
+  (function step() { const t = Math.min(1, (performance.now() - t0) / ms); fn(t); t < 1 ? requestAnimationFrame(step) : res(); })();
+});
 
-/* One avatar recipe for EVERY seat — nothing about the look can leak a role. */
-function buildAvatar(shared) {
-  const g = new THREE.Group();
-  const mk = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8 });
-  const m = { skin: mk(SKIN), shirt: mk(SHIRT), pants: mk(PANTS), hair: mk(HAIR) };
-  g.userData.mats = Object.values(m);
-  const add = (geo, mat, x, y, z, parent = g) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = true; parent.add(o); return o; };
-  add(shared.torso, m.shirt, 0, 1.15, 0);
-  add(shared.head, m.skin, 0, 1.78, 0);
-  add(shared.hair, m.hair, 0, 1.9, -0.02);
-  const pivot = (x, y) => { const p = new THREE.Group(); p.position.set(x, y, 0); g.add(p); return p; };
-  const legL = pivot(-0.14, 0.72), legR = pivot(0.14, 0.72);
-  add(shared.leg, m.pants, 0, -0.36, 0, legL); add(shared.leg, m.pants, 0, -0.36, 0, legR);
-  const armL = pivot(-0.4, 1.46), armR = pivot(0.4, 1.46);
-  add(shared.arm, m.shirt, 0, -0.3, 0, armL); add(shared.arm, m.shirt, 0, -0.3, 0, armR);
-  add(shared.hand, m.skin, 0, -0.62, 0, armL); add(shared.hand, m.skin, 0, -0.62, 0, armR);
-  const gun = new THREE.Mesh(shared.gun, new THREE.MeshStandardMaterial({ color: 0x15151c, roughness: 0.4, metalness: 0.5 }));
-  gun.position.set(0, -0.62, 0.16); gun.visible = false; armR.add(gun);
-  const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 2.3, 8), new THREE.MeshBasicMaterial({ visible: false }));
-  hit.position.y = 1.15; g.add(hit);
-  g.userData.parts = { legL, legR, armL, armR, gun, hit };
-  return g;
-}
-
-export function createScene(container, names) {
+export function createScene(container, names, outfit = {}) {
   const n = names.length;
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x15152a);
-  scene.fog = new THREE.Fog(0x15152a, 14, 34);
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  const room = buildCanteen(scene);
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 90);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(renderer.domElement);
 
-  scene.add(new THREE.HemisphereLight(0xbfc8ff, 0x20203a, 0.9));
-  const key = new THREE.DirectionalLight(0xffffff, 1.1);
-  key.position.set(5, 10, 6); key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
-  Object.assign(key.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7 });
-  scene.add(key);
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(8, 64), new THREE.MeshStandardMaterial({ color: 0x24243e, roughness: 0.95 }));
-  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.06, 64), new THREE.MeshBasicMaterial({ color: 0x4a4a78, side: THREE.DoubleSide }));
-  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01; scene.add(ring);
-
-  const shared = {
-    torso: new THREE.CylinderGeometry(0.3, 0.26, 0.8, 12), head: new THREE.SphereGeometry(0.22, 16, 14),
-    hair: new THREE.SphereGeometry(0.235, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    leg: new THREE.BoxGeometry(0.2, 0.72, 0.22), arm: new THREE.BoxGeometry(0.15, 0.6, 0.17),
-    hand: new THREE.SphereGeometry(0.085, 8, 8), gun: new THREE.BoxGeometry(0.07, 0.12, 0.34),
-  };
-
-  const avatars = [], homes = [], walking = names.map(() => false);
+  /* ── characters: every seat is built from the SAME wardrobe config, so nothing leaks a role ── */
+  const avatars = [], homes = [];
+  let outfitCfg = outfit;
+  function makeAvatar(i) {
+    const cfg = Object.assign({}, Wardrobe.config, { look: "faceted", bodyStyle: "faceted" }, outfitCfg);
+    const { root, rig } = buildCharacter(cfg);
+    const g = new THREE.Group(); g.add(root);
+    const blob = makeBlob(); blob.scale.set(1.3, 1.3, 1); g.add(blob);
+    const gun = buildPistol3D(); gun.rotation.set(Math.PI / 2, 0, 0); gun.visible = false;
+    if (rig.armR && rig.armR.grip) rig.armR.grip.add(gun);
+    const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 2.0, 8), new THREE.MeshBasicMaterial({ visible: false }));
+    hit.position.y = 1.0; hit.userData.index = i; g.add(hit);
+    const mats = new Set();
+    root.traverse((o) => { if (o.isMesh) [].concat(o.material).forEach((m) => m && m.emissive && mats.add(m)); });
+    g.userData = { index: i, root, rig, gun, mats: [...mats], st: { armed: false, aim: 0, move: 0, phase: 0 } };
+    return g;
+  }
+  function disposeAvatar(g) { g.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); }
   for (let i = 0; i < n; i++) {
-    const a = Math.PI / 2 + (i / n) * Math.PI * 2;          /* seat 0 (You) sits nearest the camera */
-    const x = Math.cos(a) * RADIUS, z = Math.sin(a) * RADIUS;
-    const av = buildAvatar(shared);
-    av.position.set(x, 0, z); av.rotation.y = Math.atan2(-x, -z);
-    av.userData.index = i; av.userData.parts.hit.userData.index = i;
-    scene.add(av); avatars.push(av); homes.push(new THREE.Vector3(x, 0, z));
+    const a = Math.PI / 2 + (i / n) * Math.PI * 2;      /* seat 0 (You) is nearest the camera */
+    const x = CENTER.x + Math.cos(a) * RADIUS, z = CENTER.z + Math.sin(a) * RADIUS;
+    const g = makeAvatar(i);
+    g.position.set(x, 0, z); g.rotation.y = Math.atan2(CENTER.x - x, CENTER.z - z);
+    scene.add(g); avatars.push(g); homes.push(new THREE.Vector3(x, 0, z));
   }
 
   /* ── name / role tags (DOM, projected each frame) ── */
-  const tags = names.map((nm) => {
-    const d = document.createElement("div"); d.className = "tag";
-    d.innerHTML = `${nm}<i></i>`; document.body.appendChild(d); return d;
+  const tags = names.map((nm, i) => {
+    const d = document.createElement("div"); d.className = "tag" + (i === 0 ? " me" : "");
+    d.innerHTML = `<b>${nm}</b><i></i>`; document.body.appendChild(d); return d;
   });
   const cross = document.createElement("div"); cross.id = "cross"; document.body.appendChild(cross);
 
-  /* ── helpers ── */
-  const ease = (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t);
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const tween = (ms, fn) => new Promise((res) => {
-    const t0 = performance.now();
-    (function step() { const t = Math.min(1, (performance.now() - t0) / ms); fn(t); t < 1 ? requestAnimationFrame(step) : res(); })();
-  });
   const glow = (i, hex) => avatars[i].userData.mats.forEach((m) => m.emissive.setHex(hex));
   const face = (i, tx, tz) => { const p = avatars[i].position; avatars[i].rotation.y = Math.atan2(tx - p.x, tz - p.z); };
 
-  async function walk(i, to, ms = 750) {
-    const av = avatars[i], from = av.position.clone(), P = av.userData.parts;
-    walking[i] = true; face(i, to.x, to.z);
-    await tween(ms, (t) => {
-      av.position.lerpVectors(from, to, ease(t));
-      const s = Math.sin(t * Math.PI * 6) * 0.7;
-      P.legL.rotation.x = s; P.legR.rotation.x = -s; P.armL.rotation.x = -s * 0.6;
-      if (!P.gun.visible) P.armR.rotation.x = s * 0.6;
-      av.position.y = Math.abs(Math.sin(t * Math.PI * 6)) * 0.05;
-    });
-    P.legL.rotation.x = P.legR.rotation.x = P.armL.rotation.x = 0;
-    if (!P.gun.visible) P.armR.rotation.x = 0;
-    av.position.y = 0; walking[i] = false;
+  /* ── pose driver (called every frame) ── */
+  function applyPose(g, t) {
+    const { rig, st } = g.userData;
+    const L = rig.armL, R = rig.armR;
+    const mv = st.move, ph = st.phase;
+    const SL = 0.55 * mv, legL = groundLeg(ph, SL, 0.9, mv), legR = groundLeg(ph + Math.PI, SL, 0.9, mv);
+    let lh = legL.thigh, lk = legL.knee, rh = legR.thigh, rk = legR.knee;
+    if (st.armed) {
+      const p = lerpArr(POSE.carry, POSE.aim, st.aim);
+      R.shoulder.rotation.set(p[0], p[1], p[2]); R.elbow.rotation.x = p[3]; if (R.wrist) R.wrist.rotation.x = p[4];
+      L.shoulder.rotation.set(p[5], p[6], p[7]); L.elbow.rotation.x = p[8]; if (L.wrist) L.wrist.rotation.x = p[9];
+      rig.spine.rotation.x = p[10]; rig.spine.rotation.y = p[11]; rig.hips.rotation.y = p[12] * st.aim * (1 - mv);
+      rig.head.rotation.set(p[13], p[14], p[15] * 0);
+      const k = st.aim * (1 - mv);
+      lh += (LEGS_AIM.lh - lh) * k; lk += (LEGS_AIM.lk - lk) * k; rh += (LEGS_AIM.rh - rh) * k; rk += (LEGS_AIM.rk - rk) * k;
+    } else {
+      const aL = groundArm(ph + Math.PI, 0.5 * mv, 0, mv), aR = groundArm(ph, 0.5 * mv, 0, mv);
+      L.shoulder.rotation.set(aL.swing, 0, aL.spread * 0.6); L.elbow.rotation.x = aL.elbow;
+      R.shoulder.rotation.set(aR.swing, 0, -aR.spread * 0.6); R.elbow.rotation.x = aR.elbow;
+      rig.spine.rotation.x = Math.sin(t * 1.6 + g.userData.index) * 0.012; rig.spine.rotation.y = 0; rig.hips.rotation.y = 0;
+      rig.head.rotation.set(0, Math.sin(t * 0.7 + g.userData.index * 2) * 0.12, 0);
+    }
+    rig.legL.hip.rotation.x = lh; rig.legL.knee.rotation.x = lk; rig.legR.hip.rotation.x = rh; rig.legR.knee.rotation.x = rk;
+    const an = (l) => l.ankle || l.ank;
+    if (an(rig.legL)) an(rig.legL).rotation.x = groundLeg(ph, SL, 0.9, mv).ankle * (1 - st.aim * 0.8);
+    if (an(rig.legR)) an(rig.legR).rotation.x = groundLeg(ph + Math.PI, SL, 0.9, mv).ankle * (1 - st.aim * 0.8);
   }
 
-  /* ── camera (drag to look around) ── */
-  let theta = 0, phi = 0.62, dist = 10.5, shakeUntil = 0, shakeAmt = 0;
+  async function walk(i, to, ms) {
+    const g = avatars[i], st = g.userData.st, from = g.position.clone();
+    face(i, to.x, to.z); st.move = 1;
+    const cycles = from.distanceTo(to) * 0.55;
+    await tween(ms, (t) => { g.position.lerpVectors(from, to, ease(t)); st.phase = t * cycles * Math.PI * 2; });
+    st.move = 0; st.phase = 0;
+  }
+  const draw = (i) => { const g = avatars[i]; g.userData.gun.visible = true; g.userData.st.armed = true; setGrip(g.userData.rig, -1, 1); setGrip(g.userData.rig, 1, 1); };
+  const holster = (i) => { const g = avatars[i]; g.userData.gun.visible = false; g.userData.st.armed = false; g.userData.st.aim = 0; setGrip(g.userData.rig, -1, 0); setGrip(g.userData.rig, 1, 0); };
+  const raise = (i, ms = 420) => { const st = avatars[i].userData.st; const a0 = st.aim; return tween(ms, (t) => { st.aim = a0 + (1 - a0) * ease(t); }); };
+
+  /* ── camera: drag to orbit, wheel / pinch to zoom, always inside the canteen ── */
+  let theta = 0, phi = 0.74, zoom = 1, shakeUntil = 0, shakeAmt = 0, focus = null;
+  const look = new THREE.Vector3(CENTER.x, 1.0, CENTER.z);
   function placeCamera() {
     const aspect = container.clientWidth / Math.max(1, container.clientHeight);
-    dist = aspect < 1 ? 15 : aspect < 1.5 ? 12 : 10;
-    camera.position.set(Math.sin(theta) * Math.cos(phi) * dist, Math.sin(phi) * dist + 1.2, Math.cos(theta) * Math.cos(phi) * dist);
-    camera.lookAt(0, 1.0, 0);
+    const base = aspect < 1 ? 13.5 : aspect < 1.5 ? 12.2 : 10.8;
+    const d = base * zoom;
+    const tgt = focus ? focus : { x: CENTER.x, y: 1.0, z: CENTER.z };
+    look.lerp(new THREE.Vector3(tgt.x, tgt.y, tgt.z), 0.08);
+    camera.position.set(look.x + Math.sin(theta) * Math.cos(phi) * d, look.y + Math.sin(phi) * d + 0.6, look.z + Math.cos(theta) * Math.cos(phi) * d);
+    camera.position.z = Math.min(camera.position.z, room.HZ - 0.6); camera.position.x = Math.max(-room.HX + 0.6, Math.min(room.HX - 0.6, camera.position.x));
+    camera.lookAt(look);
     if (performance.now() < shakeUntil) camera.position.addScalar((Math.random() - 0.5) * shakeAmt);
   }
   function resize() {
     const w = container.clientWidth, h = container.clientHeight;
-    camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+    camera.aspect = w / h; camera.fov = w / h < 1 ? 62 : 50; camera.updateProjectionMatrix(); renderer.setSize(w, h);
   }
   addEventListener("resize", resize); resize();
 
   /* ── shot effects ── */
-  function tip(i) { const v = new THREE.Vector3(0, -0.62, 0.36); avatars[i].userData.parts.armR.localToWorld(v); return v; }
   async function fireFx(from, to) {
-    const a = tip(from), b = avatars[to].position.clone().setY(1.2);
-    const flash = new THREE.PointLight(0xffaa00, 4, 6); flash.position.copy(a); scene.add(flash);
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffdd44, transparent: true }));
+    const gun = avatars[from].userData.gun; gun.updateMatrixWorld(true);
+    const a = gun.localToWorld(gun.userData.muzzleLocal.clone()), b = avatars[to].position.clone().setY(1.25);
+    const flash = new THREE.PointLight(0xffaa33, 5, 6); flash.position.copy(a); scene.add(flash);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true }));
     ball.position.copy(a); scene.add(ball);
     const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
-    const mat = new THREE.LineBasicMaterial({ color: 0xffee88, transparent: true });
+    const mat = new THREE.LineBasicMaterial({ color: 0xfff1b0, transparent: true });
     const line = new THREE.Line(geo, mat); scene.add(line);
-    shakeAmt = 0.22; shakeUntil = performance.now() + 220;
-    await tween(260, (t) => { ball.material.opacity = 1 - t; ball.scale.setScalar(1 + t * 2); mat.opacity = 1 - t; flash.intensity = 4 * (1 - t); });
+    shakeAmt = 0.2; shakeUntil = performance.now() + 220;
+    const kick = avatars[from].userData.st;
+    await tween(280, (t) => { ball.material.opacity = 1 - t; ball.scale.setScalar(1 + t * 3); mat.opacity = 1 - t; flash.intensity = 5 * (1 - t); kick.aim = 1 - Math.sin(t * Math.PI) * 0.18; });
     [flash, ball, line].forEach((o) => scene.remove(o)); ball.geometry.dispose(); ball.material.dispose(); geo.dispose(); mat.dispose();
   }
 
-  /* ── aiming (human Police) ── */
+  /* ── aiming (human Police): tap selects, tap again / confirm fires ── */
   const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
   let aim = null, hover = -1;
   function pick(x, y, exclude) {
     const r = renderer.domElement.getBoundingClientRect();
     ptr.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ptr, camera);
-    const hits = ray.intersectObjects(avatars, true);
-    for (const h of hits) { let o = h.object; while (o && o.userData.index === undefined) o = o.parent; if (o && o.userData.index !== exclude) return o.userData.index; }
+    for (const h of ray.intersectObjects(avatars, true)) { let o = h.object; while (o && o.userData.index === undefined) o = o.parent; if (o && o.userData.index !== exclude) return o.userData.index; }
     return -1;
   }
-  function setHover(i) {
-    if (i === hover) return;
-    if (hover >= 0) glow(hover, 0);
-    hover = i; if (i >= 0) glow(i, 0xff4444);
-    cross.classList.toggle("lock", i >= 0);
-    if (aim && i >= 0) face(aim.police, avatars[i].position.x, avatars[i].position.z);
+  function paintGlow() { avatars.forEach((_, i) => glow(i, aim && i === aim.sel ? 0xc0201a : i === hover ? 0x5a4208 : 0)); }
+  function setHover(i) { if (i === hover) return; hover = i; if (aim && aim.onHover) aim.onHover(i); cross.classList.toggle("lock", i >= 0); paintGlow(); }
+  function select(t) {
+    if (!aim) return;
+    aim.sel = t; face(aim.police, avatars[t].position.x, avatars[t].position.z); paintGlow();
+    focus = { x: avatars[t].position.x * 0.5 + CENTER.x * 0.5, y: 1.1, z: avatars[t].position.z * 0.5 + CENTER.z * 0.5 };
+    if (aim.onSelect) aim.onSelect(t);
   }
-  let down = null, dragged = false, lx = 0, ly = 0;
-  const cv = renderer.domElement;
-  cv.addEventListener("pointerdown", (e) => { down = e.pointerId; dragged = false; lx = e.clientX; ly = e.clientY; sx = lx; sy = ly; });
-  let sx = 0, sy = 0;
+  async function confirmFire() {
+    if (!aim || aim.sel < 0) return;
+    const a = aim; aim = null; cross.style.display = "none"; cross.classList.remove("lock");
+    if (a.onFire) a.onFire();
+    await fireFx(a.police, a.sel); focus = null; hover = -1; glow(a.sel, 0); a.resolve(a.sel);
+  }
+  let down = false, dragged = false, lx = 0, ly = 0, sx = 0, sy = 0;
+  const cv = renderer.domElement, pts = new Map();
+  cv.addEventListener("pointerdown", (e) => { pts.set(e.pointerId, e); down = true; dragged = false; lx = sx = e.clientX; ly = sy = e.clientY; });
   addEventListener("pointermove", (e) => {
-    if (aim) { cross.style.left = e.clientX + "px"; cross.style.top = e.clientY + "px"; setHover(pick(e.clientX, e.clientY, aim.police)); }
-    if (down === null) return;
+    if (pts.has(e.pointerId)) pts.set(e.pointerId, e);
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); if (cv._pd) zoom = Math.max(0.6, Math.min(1.3, zoom * (cv._pd / d))); cv._pd = d; dragged = true; return; }
+    if (aim && e.pointerType === "mouse") { cross.style.left = e.clientX + "px"; cross.style.top = e.clientY + "px"; setHover(pick(e.clientX, e.clientY, aim.police)); }
+    if (!down) return;
     if (!dragged && Math.hypot(e.clientX - sx, e.clientY - sy) > 8) dragged = true;
-    if (dragged) { theta -= (e.clientX - lx) * 0.006; phi = Math.max(0.25, Math.min(1.1, phi + (e.clientY - ly) * 0.004)); }
+    if (dragged) { theta -= (e.clientX - lx) * 0.006; phi = Math.max(0.22, Math.min(1.15, phi + (e.clientY - ly) * 0.004)); }
     lx = e.clientX; ly = e.clientY;
   });
   addEventListener("pointerup", (e) => {
-    if (down === null) return; down = null;
+    pts.delete(e.pointerId); cv._pd = 0;
+    if (!down) return; down = pts.size > 0;
     if (dragged || !aim) return;
     const t = pick(e.clientX, e.clientY, aim.police);
     if (t < 0) return;
-    const a = aim; aim = null; cross.style.display = "none"; cross.classList.remove("lock");
-    face(a.police, avatars[t].position.x, avatars[t].position.z);
-    glow(t, 0xff4444); hover = t;
-    fireFx(a.police, t).then(() => { glow(t, 0); hover = -1; a.resolve(t); });
+    if (aim.sel === t) confirmFire(); else select(t);
   });
+  cv.addEventListener("wheel", (e) => { zoom = Math.max(0.6, Math.min(1.3, zoom + e.deltaY * 0.001)); e.preventDefault(); }, { passive: false });
 
   /* ── loop ── */
   const v = new THREE.Vector3();
   function frame() {
     requestAnimationFrame(frame);
-    const t = performance.now() * 0.002;
-    avatars.forEach((a, i) => { if (!walking[i]) a.position.y = Math.sin(t + i) * 0.025; });
+    const t = performance.now() * 0.001;
+    avatars.forEach((g) => applyPose(g, t));
     placeCamera();
     renderer.render(scene, camera);
     const w = container.clientWidth, h = container.clientHeight;
     tags.forEach((d, i) => {
-      v.copy(avatars[i].position); v.y += 2.25; v.project(camera);
+      v.copy(avatars[i].position); v.y += 2.1; v.project(camera);
       d.style.transform = `translate(${(v.x * 0.5 + 0.5) * w}px,${(-v.y * 0.5 + 0.5) * h}px) translate(-50%,-100%)`;
     });
   }
   frame();
 
-  /* ── API ── */
   return {
-    async policeOut(i) {
-      const inward = homes[i].clone().negate().normalize();
-      await walk(i, homes[i].clone().addScaledVector(inward, 1.7));
-      const P = avatars[i].userData.parts; P.gun.visible = true; P.armR.rotation.x = -Math.PI / 2;
+    wait,
+    setOutfit(cfg) {
+      outfitCfg = cfg;
+      avatars.forEach((old, i) => {
+        const g = makeAvatar(i); g.position.copy(old.position); g.rotation.copy(old.rotation);
+        scene.remove(old); disposeAvatar(old); scene.add(g); avatars[i] = g;
+      });
     },
-    /* NPC Police: aim at target, beat, fire. */
+    async policeOut(i) {
+      draw(i);
+      const inward = homes[i].clone().sub(new THREE.Vector3(CENTER.x, 0, CENTER.z)).negate().normalize();
+      await walk(i, homes[i].clone().addScaledVector(inward, 1.6), 1100);
+      await raise(i);
+    },
     async npcFire(i, target) {
       face(i, avatars[target].position.x, avatars[target].position.z);
-      glow(target, 0xff4444); await wait(900);
+      glow(target, 0xc0201a); await wait(950);
       await fireFx(i, target); glow(target, 0);
     },
-    /* Human Police: resolves with the seat index tapped. */
-    humanAim(i) {
+    /* Human Police. Resolves with the confirmed seat. onSelect(i) fires when a suspect is picked. */
+    humanAim(i, { onSelect, onHover, onFire } = {}) {
       return new Promise((resolve) => {
-        aim = { police: i, resolve }; hover = -1;
+        aim = { police: i, resolve, sel: -1, onSelect, onHover, onFire }; hover = -1;
         cross.style.display = "block"; cross.style.left = innerWidth / 2 + "px"; cross.style.top = innerHeight / 2 + "px";
       });
     },
+    confirmFire,
+    clearSelection() { if (aim) { aim.sel = -1; focus = null; paintGlow(); } },
     async policeBack(i) {
-      const P = avatars[i].userData.parts; P.gun.visible = false; P.armR.rotation.x = 0;
-      await walk(i, homes[i], 700);
-      face(i, 0, 0);
+      const st = avatars[i].userData.st; const a0 = st.aim;
+      await tween(300, (t) => { st.aim = a0 * (1 - t); });
+      await walk(i, homes[i], 1000);
+      holster(i); face(i, CENTER.x, CENTER.z);
     },
-    async flash(i, hex) { glow(i, hex); await wait(900); glow(i, 0); },
-    setTag(i, text, cls = "") { tags[i].className = "tag " + cls; tags[i].querySelector("i").textContent = text || ""; },
-    clearTags() { tags.forEach((d) => { d.className = "tag"; d.querySelector("i").textContent = ""; }); },
-    wait,
+    async flash(i, hex) { glow(i, hex); await wait(1000); glow(i, 0); },
+    setTag(i, text, cls = "") { tags[i].className = "tag" + (i === 0 ? " me" : "") + (cls ? " " + cls : ""); tags[i].querySelector("i").textContent = text || ""; },
+    clearTags() { tags.forEach((d, i) => { d.className = "tag" + (i === 0 ? " me" : ""); d.querySelector("i").textContent = ""; }); },
+    cam(o) { if (o.theta !== undefined) theta = o.theta; if (o.phi !== undefined) phi = o.phi; if (o.zoom !== undefined) zoom = o.zoom; if (o.seat !== undefined) { const p = avatars[o.seat].position; focus = { x: p.x, y: 1.2, z: p.z }; } },
+    resetCamera() { theta = 0; phi = 0.74; zoom = 1; focus = null; },
+    screenPos(i) { v.copy(avatars[i].position); v.y += 1.2; v.project(camera); return { x: (v.x * 0.5 + 0.5) * container.clientWidth, y: (-v.y * 0.5 + 0.5) * container.clientHeight }; },
   };
 }

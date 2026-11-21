@@ -1,7 +1,6 @@
 /* Service worker — offline play. Network-first for code (new builds show up when online), cache fallback. */
-const V = "pct-v1";
-const FILES = ["./", "./index.html", "./style.css", "./manifest.webmanifest", "./js/main.js", "./js/rules.js", "./js/scene.js",
-  "./vendor/three.module.min.js", "./assets/icon-192.png", "./assets/icon-512.png"];
+const V = "pct-v2";
+const FILES = ["./", "./index.html", "./style.css", "./manifest.webmanifest", "./js/main.js", "./js/rules.js", "./js/scene.js", "./js/sound.js", "./js/canteen.js", "./js/gun.js", "./vendor/three.module.min.js", "./assets/icon-192.png", "./assets/icon-512.png", "./js/engine/characters/fabric.js", "./js/engine/characters/faceted.js", "./js/engine/characters/lowpoly.js", "./js/engine/characters/lp-bodystyle.js", "./js/engine/characters/lp-bottoms.js", "./js/engine/characters/lp-costumes.js", "./js/engine/characters/lp-extras.js", "./js/engine/characters/lp-hair.js", "./js/engine/characters/lp-parts.js", "./js/engine/characters/lp-tops.js", "./js/engine/core/style-ability-shop.js", "./js/engine/core/wardrobe.js"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== V).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", (e) => {

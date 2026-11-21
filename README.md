@@ -16,4 +16,6 @@ Roles are reshuffled every round. The Police walks forward and shoots who they t
 Scoring: Police shoots the Thief → Police banks 500. Police shoots anyone else → that player banks 500.
 No one ever loses points. Scores are kept in your browser (localStorage).
 
+Set in the **Everyday-in-PH canteen**. The five players are built with the main game's **faceted lowpoly wardrobe** (everyone wears the same outfit so nobody can be read) and carry the main game's **pistol** with its solved two-handed stance. Pick a shared outfit in the menu. UI: glass HUD, hold-to-peek role card, lock-on + FIRE, synth sound, haptics, round history.
+
 No build step: static `index.html` + ES modules + a bundled three.js (r169, MIT). Run locally with `python3 -m http.server 8080`.
