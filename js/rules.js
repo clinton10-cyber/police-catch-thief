@@ -19,9 +19,17 @@ export function shuffle(arr, rng = Math.random) {
 }
 
 /* Seats never move; the folded papers are reshuffled and dealt every round. */
-export function createRound(seats, rng = Math.random) {
+/* The shuffled papers lie face-down in a row. The human takes paper `pick`; the rest go to the NPCs at random. */
+export function createRound(seats, rng = Math.random, pick = null) {
   if (seats.length !== DECK.length) throw new Error(`Needs exactly ${DECK.length} seats`);
-  const roles = shuffle(DECK, rng);
+  const papers = shuffle(DECK, rng);
+  let roles = papers;
+  if (pick !== null && pick >= 0 && pick < papers.length) {
+    const rest = shuffle(papers.filter((_, k) => k !== pick), rng);
+    const humanSeat = seats.findIndex((s) => s.isHuman);
+    roles = []; let r = 0;
+    seats.forEach((_, i) => { roles[i] = i === humanSeat ? papers[pick] : rest[r++]; });
+  }
   const dealt = seats.map((s, i) => ({ ...s, role: roles[i] }));
   return {
     seats: dealt,

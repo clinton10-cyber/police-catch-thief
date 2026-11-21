@@ -85,16 +85,20 @@ $("#fire").onclick = () => world.confirmFire();
 
 /* ── the round ── */
 async function playRound() {
-  roundNo++; locked = false;
+  roundNo++; locked = false; peek(false); card.classList.add("nodeal");
   world.clearTags(); hideResult(); step("deal"); world.clearPapers();
-  round = Rules.createRound(seats);
+  prompt("Spreading the folded papers…");
+  await world.spreadPapers();
+  prompt("Pick any folded paper — tap one to take it.");
+  const pick = await world.pickPaper(); Sound.flip(); buzz(15);
+  round = Rules.createRound(seats, Math.random, pick);
+  prompt("Papers going round…");
   const me = round.seats.find((s) => s.isHuman), youPolice = round.police.isHuman;
   policeSeat = round.police.seatId;
   renderBoard(seats);
   setCard(me.role);
-  prompt("Dealing the folded papers…");
-  await world.dealPapers(); Sound.flip();
-  prompt(`Round ${roundNo} — papers dealt. Hold your card to peek.`);
+  await world.dealRest(pick); Sound.flip();
+  prompt(`Round ${roundNo} — everyone has a paper. Hold your card to peek.`);
   if (roundNo === 1) { await wait(500); peek(true); await wait(1700); if (!locked) peek(false); } else await wait(2000);
 
   step("police"); renderBoard(seats, policeSeat);

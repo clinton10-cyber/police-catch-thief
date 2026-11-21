@@ -166,6 +166,7 @@ export function createScene(container, names, outfit = {}) {
   addEventListener("pointermove", (e) => {
     if (pts.has(e.pointerId)) pts.set(e.pointerId, e);
     if (pts.size === 2) { const [a, b] = [...pts.values()]; const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); if (cv._pd) zoom = Math.max(0.6, Math.min(1.3, zoom * (cv._pd / d))); cv._pd = d; dragged = true; return; }
+    if (pickMode && e.pointerType === "mouse") hoverPaper(paperAt(e.clientX, e.clientY));
     if (aim && e.pointerType === "mouse") { cross.style.left = e.clientX + "px"; cross.style.top = e.clientY + "px"; setHover(pick(e.clientX, e.clientY, aim.police)); }
     if (!down) return;
     if (!dragged && Math.hypot(e.clientX - sx, e.clientY - sy) > 8) dragged = true;
@@ -175,6 +176,7 @@ export function createScene(container, names, outfit = {}) {
   addEventListener("pointerup", (e) => {
     pts.delete(e.pointerId); cv._pd = 0;
     if (!down) return; down = pts.size > 0;
+    if (!dragged && pickMode) { takePaper(e.clientX, e.clientY); return; }
     if (dragged || !aim) return;
     const t = pick(e.clientX, e.clientY, aim.police);
     if (t < 0) return;
@@ -201,21 +203,44 @@ export function createScene(container, names, outfit = {}) {
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   }
   const slot = (i) => { const h = homes[i], d = new THREE.Vector3(CENTER.x - h.x, 0, CENTER.z - h.z).normalize(); return h.clone().addScaledVector(d, 0.75).setY(1.2); };
-  async function dealPapers() {
-    await clearPapers();
+  /* Spread the shuffled folded papers on the table; the human taps any one, the NPCs take the rest. */
+  let row = [], pickMode = null, hoverP = -1;
+  async function spreadPapers() {
+    await clearPapers(); row = [];
     const pile = new THREE.Vector3(CENTER.x, 0.95, CENTER.z);
-    const order = [...Array(n).keys()].sort(() => Math.random() - 0.5);   /* random hand-out order */
-    const jobs = order.map((seat, k) => new Promise(async (res) => {
-      const p = makePaper(); p.position.copy(pile); scene.add(p); papers[seat] = p;
-      const to = slot(seat); p.userData.rest.copy(to);
-      await wait(k * 170);
-      await tween(620, (t) => {
-        const e = ease(t); p.position.lerpVectors(pile, to, e); p.position.y += Math.sin(t * Math.PI) * 0.7;
-        p.rotation.set(0, t * Math.PI * 4, Math.sin(t * Math.PI) * 0.6);
-      });
-      p.rotation.set(0, Math.atan2(CENTER.x - homes[seat].x, CENTER.z - homes[seat].z), 0); res();
+    const jobs = [...Array(n).keys()].map((k) => new Promise(async (res) => {
+      const p = makePaper(); p.userData.pi = k; p.position.copy(pile); scene.add(p); row[k] = p;
+      const to = new THREE.Vector3(CENTER.x + (k - (n - 1) / 2) * 0.62, 1.0, CENTER.z + 0.1); p.userData.rest.copy(to);
+      await wait(k * 120);
+      await tween(560, (t) => { const e = ease(t); p.position.lerpVectors(pile, to, e); p.position.y += Math.sin(t * Math.PI) * 0.6; p.rotation.set(0, (1 - e) * 3, 0); });
+      p.rotation.set(0, 0, 0); res();
     }));
     await Promise.all(jobs);
+  }
+  function pickPaper() { return new Promise((resolve) => { pickMode = { resolve }; row.forEach((p) => (p.userData.attn = true)); }); }
+  function paperAt(x, y) {
+    const r = renderer.domElement.getBoundingClientRect();
+    ptr.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1); ray.setFromCamera(ptr, camera);
+    const hits = ray.intersectObjects(row.filter(Boolean), true);
+    for (const h of hits) { let o = h.object; while (o && o.userData.pi === undefined) o = o.parent; if (o) return o.userData.pi; }
+    return -1;
+  }
+  function hoverPaper(i) { hoverP = i; }
+  function takePaper(x, y) {
+    if (!pickMode) return false;
+    const k = paperAt(x, y); if (k < 0) return true;
+    const m = pickMode; pickMode = null; hoverP = -1; row.forEach((p) => (p.userData.attn = false)); m.resolve(k); return true;
+  }
+  async function dealRest(pick) {
+    const move = (k, seat) => new Promise(async (res) => {
+      const p = row[k], from = p.position.clone(), to = slot(seat); p.userData.rest.copy(to); papers[seat] = p;
+      await tween(620, (t) => { const e = ease(t); p.position.lerpVectors(from, to, e); p.position.y += Math.sin(t * Math.PI) * 0.7; p.rotation.set(0, t * Math.PI * 2, 0); p.scale.setScalar(p.scale.x + (1 - p.scale.x) * 0.2); });
+      p.rotation.set(0, Math.atan2(CENTER.x - homes[seat].x, CENTER.z - homes[seat].z), 0); res();
+    });
+    await move(pick, 0);
+    const rest = [...Array(n).keys()].filter((k) => k !== pick), seatsLeft = [1, 2, 3, 4].slice(0, rest.length).sort(() => Math.random() - 0.5);
+    await Promise.all(rest.map((k, idx) => wait(idx * 150).then(() => move(k, seatsLeft[idx]))));
+    row = [];
   }
   async function openPaper(i, text, color) {
     const p = papers[i]; if (!p || p.userData.state !== "folded") return;
@@ -239,6 +264,7 @@ export function createScene(container, names, outfit = {}) {
     requestAnimationFrame(frame);
     const t = performance.now() * 0.001;
     avatars.forEach((g) => applyPose(g, t));
+    row.forEach((p, k) => { if (!p || !p.userData.attn) return; const hv = k === hoverP; p.position.y = p.userData.rest.y + Math.sin(t * 3 + k) * 0.04 + (hv ? 0.08 : 0); p.scale.setScalar(hv ? 2.4 : 1.9 + Math.sin(t * 3 + k) * 0.08); });
     papers.forEach((p, i) => {
       if (!p) return;
       if (p.userData.state === "folded" && p.userData.rest.y && p.position.distanceTo(p.userData.rest) < 0.2) p.position.y = p.userData.rest.y + Math.sin(t * 2 + i) * 0.015;
@@ -263,7 +289,8 @@ export function createScene(container, names, outfit = {}) {
         scene.remove(old); disposeAvatar(old); scene.add(g); avatars[i] = g;
       });
     },
-    dealPapers, openPaper, clearPapers,
+    paperPos(k) { const p = row[k]; if (!p) return null; v.copy(p.position); v.project(camera); return { x: (v.x * 0.5 + 0.5) * container.clientWidth, y: (-v.y * 0.5 + 0.5) * container.clientHeight }; },
+    spreadPapers, pickPaper, dealRest, openPaper, clearPapers,
     async policeOut(i) {
       draw(i);
       const inward = homes[i].clone().sub(new THREE.Vector3(CENTER.x, 0, CENTER.z)).negate().normalize();
